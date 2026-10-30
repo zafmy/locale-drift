@@ -51,7 +51,7 @@ Exit codes: 0 no errors, 1 an error (or a warning with `--strict`), 2 bad usage,
 
 | Rule | Severity | Finds |
 |---|---|---|
-| `missing` | error | A source key, or a whole namespace file, that the target lacks. For i18next plural keys it follows the target language: ms needs only `_other`, ru also needs `_few` and `_many`, ar needs `_zero` and `_two` too |
+| `missing` | error | A source key, or a whole namespace file, that the target lacks. For i18next plural sets (`_other` plus another form) it follows the target language: ms needs only `_other`. Forms the target uses but the source lacks, like ru `_few`/`_many`, are warnings, because i18next falls back to `_other` |
 | `extra` | warning | A key only the target has, usually a renamed or stale key |
 | `type` | error | A string on one side and an object, array or number on the other |
 | `placeholder` | error | ICU `{name}` / i18next `{{name}}` / `$t(key)` arguments that differ, or unbalanced braces. Order doesn't matter, and plural/select branch text is not an argument |

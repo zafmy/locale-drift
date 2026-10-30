@@ -111,7 +111,8 @@ function hook(source: string): void {
   } catch (e) {
     return skipped(e instanceof Error ? e.message : String(e));
   }
-  if (all.some((f) => f.file === pair[0].file && f.rule === 'invalid-json')) return skipped(`${pair[0].file} is not valid JSON`);
+  const targetBroken = all.some((f) => f.file === written.file && f.rule === 'invalid-json');
+  if (!targetBroken && all.some((f) => f.file === pair[0].file && f.rule === 'invalid-json')) return skipped(`${pair[0].file} is not valid JSON`);
   // Only the file the agent just wrote: a broken source is not this edit's fault.
   const findings = all.filter((f) => f.file === written.file).filter(keep);
   if (!findings.length) return;
@@ -161,19 +162,21 @@ if (!sources.length) die(`no "${values.source}" source locale; found ${locales.j
 if (!targets.length) die(`only the source locale "${values.source}" was found; nothing to compare`);
 if (locales.length - 1 > MAX_TARGETS) die(`${locales.length - 1} target locales; locale-drift checks up to ${MAX_TARGETS} per run`);
 
-let findings: Finding[] = [];
+let all: Finding[] = [];
 try {
-  findings = compare(sources, targets).filter(keep);
+  all = compare(sources, targets);
 } catch (e) {
   die(e instanceof Error ? e.message : String(e));
 }
+const findings = all.filter(keep);
 const errors = findings.filter((f) => f.severity === 'error').length;
 const warnings = findings.length - errors;
-const ok = errors === 0 && (!values.strict || warnings === 0);
 const shownFiles = [...new Set([...targets.map((t) => t.file), ...findings.map((f) => f.file)])];
 // Targets whose source file did not parse were never compared, so they must not look clean.
-const brokenSources = sources.filter((s) => findings.some((f) => f.file === s.file && f.rule === 'invalid-json'));
+// Read from all findings, so --ignore invalid-json cannot turn an unchecked target into a pass.
+const brokenSources = sources.filter((s) => all.some((f) => f.file === s.file && f.rule === 'invalid-json'));
 const unchecked = targets.filter((t) => brokenSources.some((s) => s.ns === t.ns)).map((t) => t.file);
+const ok = errors === 0 && unchecked.length === 0 && (!values.strict || warnings === 0);
 
 function text(): string {
   const lines: string[] = [];

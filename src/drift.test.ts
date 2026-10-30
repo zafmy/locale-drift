@@ -328,3 +328,40 @@ test('round2 hook: an invalid source is reported as skipped context, never a blo
   assert.equal(out.decision, undefined);
   assert.match(out.hookSpecificOutput.additionalContext, /skipped.*locales\/en\.json/s);
 });
+
+// Round three of the review.
+const loc = (l: string) => (o: unknown) => ({ file: `${l}.json`, locale: l, text: JSON.stringify(o) });
+
+test('round3: a key ending in _other with no plural siblings is not a plural', () => {
+  const s = { option_other: 'Other', option_none: 'None', gender_male: 'Male', gender_other: 'Other', reason_other: 'Other reason' };
+  const t = { option_other: 'Другое', option_none: 'Нет', gender_male: 'Мужской', gender_other: 'Другой', reason_other: 'Другая причина' };
+  assert.deepEqual(compare([en(s)], [loc('ru')(t)]), []);
+  assert.deepEqual(compare([en(s)], [loc('en-GB')(s)]), []);
+});
+
+test('round3: forms the target needs but the source lacks are warnings (i18next falls back to _other)', () => {
+  const s = { items_one: '{{count}} item', items_other: '{{count}} items' };
+  const f = compare([en(s)], [loc('fr')({ items_one: '{{count}} article', items_other: '{{count}} articles' })]);
+  assert.deepEqual(f.map((x) => `${x.key}:${x.rule}:${x.severity}`), ['items_many:missing:warning']);
+  // An ICU project never needs i18next suffix keys.
+  assert.deepEqual(compare([en({ ...s, hello: 'Hello {name}', items_one: '{n} item', items_other: '{n} items' })], [loc('ru')({ hello: 'Привет {name}', items_one: '{n} x', items_other: '{n} y' })]), []);
+});
+
+test('round3: distinct words ignore case', () => {
+  const v = { a: '{n, plural, =0 {Email} other {# email}}' };
+  assert.deepEqual(run(v, v), []);
+});
+
+test('round3 hook: an invalid target is still blocked when the source is broken too', () => {
+  const dir = project({ 'locales/en.json': '{"a":', 'locales/ms.json': '{"a": "Hai",}' });
+  const out = JSON.parse(hook(dir, 'locales/ms.json').stdout);
+  assert.equal(out.decision, 'block');
+  assert.match(out.reason, /invalid-json/);
+});
+
+test('round3 cli: --ignore invalid-json does not turn unchecked targets into passes', () => {
+  const dir = project({ 'locales/en.json': '{"a":', 'locales/ms.json': { a: 'Hai' } });
+  const r = exec(['--ignore', 'invalid-json'], { cwd: dir });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /not checked/);
+});

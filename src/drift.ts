@@ -167,7 +167,7 @@ function words(s: string, format: Format): number {
   let rest = format === 'icu' ? icuParse(s).text : s.replace(/\$t\([^)]*\)/g, ' ').replace(/\{\{[^}]*\}\}/g, ' ');
   rest = rest.replace(TAG, ' ').replace(/\bhttps?:\/\/\S+|\bwww\.\S+|\S+@\S+\.\S+/g, ' ');
   // Distinct words, so the same loanword in every plural branch (one {# km} other {# km}) is still one.
-  return new Set(rest.match(/\p{L}[\p{L}\p{M}'’]+/gu) ?? []).size;
+  return new Set((rest.match(/\p{L}[\p{L}\p{M}'’]+/gu) ?? []).map((w) => w.toLocaleLowerCase())).size;
 }
 
 // en and en-GB are one language; zh-Hans and zh-Hant are not, because the script differs.
@@ -190,11 +190,15 @@ function pluralCategories(locale: string, type: Intl.PluralRuleType): Set<string
 
 const PLURAL_KEY = /^(.*?)(_ordinal)?_(zero|one|two|few|many|other)$/;
 
-// For an i18next plural key (it has an _other sibling), whether the target language uses that form.
+// An i18next plural set has _other plus at least one other form; gender_other or option_other alone is a plain key.
+const isPluralSet = (base: string, keys: Map<string, unknown>) =>
+  keys.has(`${base}_other`) && ['zero', 'one', 'two', 'few', 'many'].some((c) => keys.has(`${base}_${c}`));
+
+// For a key in an i18next plural set, whether the target language uses that form.
 // _zero counts only where CLDR has a zero form (ar, lv); elsewhere it is i18next's optional extra.
-function pluralForm(key: string, keys: Map<string, unknown>, locale: string): 'used' | 'unused' | undefined {
+function pluralForm(key: string, keys: Map<string, unknown>, locale: string, format: Format): 'used' | 'unused' | undefined {
   const m = PLURAL_KEY.exec(key);
-  if (!m || !keys.has(`${m[1]}${m[2] ?? ''}_other`)) return undefined;
+  if (format !== 'i18next' || !m || !isPluralSet(`${m[1]}${m[2] ?? ''}`, keys)) return undefined;
   const cats = pluralCategories(locale, m[2] ? 'ordinal' : 'cardinal');
   return !cats || cats.has(m[3]) ? 'used' : 'unused';
 }
@@ -277,7 +281,7 @@ function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
   const out: Finding[] = [];
   const typed = new Set<string>();
   const key = (k: string) => (ns ? `${ns}:${k}` : k);
-  const add = (k: string, rule: Rule, message: string) => out.push({ file, locale, key: key(k), rule, severity: SEVERITY[rule], message });
+  const add = (k: string, rule: Rule, message: string, severity = SEVERITY[rule]) => out.push({ file, locale, key: key(k), rule, severity, message });
   const type = (k: string) => {
     if (typed.has(k)) return;
     typed.add(k);
@@ -297,7 +301,7 @@ function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
     const prefix = leafPrefix(k, T.leaves);
     if (T.containers.has(k)) type(k);
     else if (prefix !== undefined && !S.leaves.has(prefix)) type(prefix);
-    else if (pluralForm(k, S.leaves, locale) !== 'unused') add(k, 'missing', 'is missing');
+    else if (pluralForm(k, S.leaves, locale, format) !== 'unused') add(k, 'missing', 'is missing');
   }
   for (const k of T.leaves.keys()) {
     if (S.leaves.has(k)) continue;
@@ -306,20 +310,24 @@ function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
     else if (prefix !== undefined && !T.leaves.has(prefix)) type(prefix);
     else {
       const m = PLURAL_KEY.exec(k);
-      const sourcePlural = m && S.leaves.has(`${m[1]}${m[2] ?? ''}_other`);
-      const allowed = sourcePlural && (pluralForm(k, T.leaves, locale) === 'used' || (m[3] === 'zero' && !m[2]));
+      const sourcePlural = format === 'i18next' && m && isPluralSet(`${m[1]}${m[2] ?? ''}`, S.leaves);
+      const allowed = sourcePlural && (pluralForm(k, T.leaves, locale, format) === 'used' || (m[3] === 'zero' && !m[2]));
       if (!allowed) add(k, 'extra', 'is not in the source; remove it or add it to the source');
     }
   }
-  // Plural forms the target language needs that the source lacks: ru _few/_many, ar _two.
-  for (const k of S.leaves.keys()) {
-    const m = PLURAL_KEY.exec(k);
-    if (!m || m[3] !== 'other') continue;
-    const base = `${m[1]}${m[2] ?? ''}`;
-    if (![...T.leaves.keys()].some((t) => t.startsWith(`${base}_`))) continue; // already reported as missing
-    for (const cat of pluralCategories(locale, m[2] ? 'ordinal' : 'cardinal') ?? []) {
-      const need = `${base}_${cat}`;
-      if (!S.leaves.has(need) && !T.leaves.has(need)) add(need, 'missing', `is missing; ${locale} uses the "${cat}" plural form`);
+  // Plural forms the target language needs that the source lacks (ru _few/_many, ar _two). A warning,
+  // because i18next falls back to _other; some, like fr _many, only show for counts in the millions.
+  if (format === 'i18next' && !sameLanguage) {
+    for (const k of S.leaves.keys()) {
+      const m = PLURAL_KEY.exec(k);
+      if (!m || m[3] !== 'other') continue;
+      const base = `${m[1]}${m[2] ?? ''}`;
+      const cats = pluralCategories(locale, m[2] ? 'ordinal' : 'cardinal') ?? new Set<string>();
+      if (!isPluralSet(base, S.leaves) || ![...cats].some((c) => T.leaves.has(`${base}_${c}`))) continue; // whole set missing: reported above
+      for (const cat of cats) {
+        const need = `${base}_${cat}`;
+        if (!S.leaves.has(need) && !T.leaves.has(need)) add(need, 'missing', `is missing; ${locale} uses the "${cat}" plural form`, 'warning');
+      }
     }
   }
   return out;
