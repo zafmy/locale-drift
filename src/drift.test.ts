@@ -279,10 +279,52 @@ test('review hook: bad flags exit 0; an invalid source never blocks the target; 
   const dir = project({ 'messages/en.json': '{"a": "Hi",}', 'messages/ms.json': { a: 'Hai' } });
   assert.equal(exec(['--hook', '--ignore', 'nope'], { input: '{}' }).status, 0);
   assert.equal(exec(['--hook', '--bogus'], { input: '{}' }).status, 0);
-  assert.equal(hook(dir, 'messages/ms.json').stdout, '');
+  assert.equal(JSON.parse(hook(dir, 'messages/ms.json').stdout).decision, undefined);
   const big = Object.fromEntries(Array.from({ length: MAX_KEYS + 1 }, (_, i) => [`k${i}`, 'x']));
   const lim = project({ 'messages/en.json': big, 'messages/ms.json': {} });
   const out = JSON.parse(hook(lim, 'messages/ms.json').stdout);
   assert.equal(out.decision, undefined);
   assert.match(out.hookSpecificOutput.additionalContext, /5000/);
+});
+
+// Round two of the review.
+test('round2: an ICU branch that is only an argument (other {{n}}) keeps the project ICU', () => {
+  const s = { count: '{n, plural, =0 {none} other {{n}}}', hello: 'Hello {name}' };
+  assert.deepEqual(rules(run(s, { count: '{n, plural, =0 {tiada} other {{n}}}', hello: 'Halo {nama}' })), ['hello:placeholder']);
+  const sel = { a: '{g, select, male {{name}} other {{name}}}' };
+  assert.deepEqual(run(sel, sel), []);
+});
+
+test('round2: the same loanword in every plural branch is still one word', () => {
+  const km = { a: '{n, plural, one {# km} other {# km}}', b: '{g, select, male {Dr} female {Dr} other {Dr}}' };
+  assert.deepEqual(run(km, km), []);
+});
+
+test('round2: plural forms the target language needs are required, including a CLDR zero', () => {
+  const ru = (o: unknown) => ({ file: 'ru.json', locale: 'ru', text: JSON.stringify(o) });
+  const s = { items_one: '{{count}} item', items_other: '{{count}} items' };
+  assert.deepEqual(rules(compare([en(s)], [ru({ items_one: '{{count}} x', items_other: '{{count}} y' })])), ['items_few:missing', 'items_many:missing']);
+  const ar = (o: unknown) => ({ file: 'ar.json', locale: 'ar', text: JSON.stringify(o) });
+  const z = { items_zero: 'No items', ...s };
+  const full = { items_zero: 'a', items_one: '{{count}} b', items_two: 'c', items_few: '{{count}} d', items_many: '{{count}} e', items_other: '{{count}} f' };
+  assert.deepEqual(compare([en(z)], [ar(full)]), []);
+  const { items_zero: _drop, ...noZero } = full;
+  assert.deepEqual(rules(compare([en(z)], [ar(noZero)])), ['items_zero:missing']);
+  // ms still needs only _other, and i18next's optional _zero stays optional there.
+  assert.deepEqual(run(z, { items_other: '{{count}} item' }), []);
+});
+
+test('round2 cli: a target whose source is invalid JSON is marked not checked, not ✔', () => {
+  const dir = project({ 'locales/en.json': '{"a":"Hi {n}",', 'locales/ms.json': { a: 'Hai' } });
+  const r = exec([], { cwd: dir });
+  assert.equal(r.status, 1);
+  assert.doesNotMatch(r.stdout, /✔ locales\/ms\.json/);
+  assert.match(r.stdout, /locales\/ms\.json.*not checked/);
+});
+
+test('round2 hook: an invalid source is reported as skipped context, never a block', () => {
+  const dir = project({ 'locales/en.json': '{"a":"Hi {n}",', 'locales/ms.json': { a: 'Hai' } });
+  const out = JSON.parse(hook(dir, 'locales/ms.json').stdout);
+  assert.equal(out.decision, undefined);
+  assert.match(out.hookSpecificOutput.additionalContext, /skipped.*locales\/en\.json/s);
 });

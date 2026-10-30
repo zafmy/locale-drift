@@ -42,7 +42,7 @@ It finds `<locale>.json` files (`messages/ms.json`, `locales/ms-MY.json`) and na
 | `--source <locale>` | the locale the others are translated from. Default `en` |
 | `--strict` | fail on warnings too |
 | `--ignore <rule>` | skip a rule; repeatable |
-| `--json` | one JSON object on stdout: `{version, ok, source, locales, files, summary, findings}` |
+| `--json` | one JSON object on stdout: `{version, ok, source, locales, files, unchecked, summary, findings}` |
 | `--hook` | agent hook mode, see below |
 
 Exit codes: 0 no errors, 1 an error (or a warning with `--strict`), 2 bad usage, no locale files, or over a limit.
@@ -51,12 +51,12 @@ Exit codes: 0 no errors, 1 an error (or a warning with `--strict`), 2 bad usage,
 
 | Rule | Severity | Finds |
 |---|---|---|
-| `missing` | error | A source key, or a whole namespace file, that the target lacks. Plural forms the target language does not use are not required |
+| `missing` | error | A source key, or a whole namespace file, that the target lacks. For i18next plural keys it follows the target language: ms needs only `_other`, ru also needs `_few` and `_many`, ar needs `_zero` and `_two` too |
 | `extra` | warning | A key only the target has, usually a renamed or stale key |
 | `type` | error | A string on one side and an object, array or number on the other |
 | `placeholder` | error | ICU `{name}` / i18next `{{name}}` / `$t(key)` arguments that differ, or unbalanced braces. Order doesn't matter, and plural/select branch text is not an argument |
-| `tag` | error | `<b>`, `<a href>`, `<br/>` or react-i18next `<0>` tags that differ. Attributes are ignored |
-| `untranslated` | warning | A value identical to the source with 2+ words. Skipped when both locales are the same language (`en` and `en-GB`) |
+| `tag` | error | `<b>`, `<a href>`, `<br/>` or react-i18next `<0>` tags present on one side only. Attributes and `<br />` vs `<br/>` spacing are ignored. Tags are compared as a set, so an ms plural with only an `other` branch is fine |
+| `untranslated` | warning | A value identical to the source with 2+ words, counting the text inside ICU plural and select branches. Skipped when both locales are the same language and script (`en` and `en-GB`, but not `zh-Hans` and `zh-Hant`) |
 | `empty` | warning | An empty string where the source has text |
 | `invalid-json` | error | A file that isn't valid JSON |
 
@@ -79,7 +79,7 @@ Add this to `.claude/settings.json`. Codex and Cursor accept the same command in
 }
 ```
 
-When the agent edits a target locale file, locale-drift compares that one file with its source and prints the result as hook JSON: errors block with a `reason` the agent reads, warnings are added as context. It stays silent for the source file, for files that aren't locale files, and for clean results, and always exits 0, so a half-written file never breaks the agent's turn. For speed on every edit, install it once (`npm i -D github:zafmy/locale-drift#v0.1.0`) and use `npx locale-drift --hook`.
+When the agent edits a target locale file, locale-drift compares that one file with its source and prints the result as hook JSON: errors block with a `reason` the agent reads, warnings are added as context. It reports only on the file just written, so a broken source never blocks the agent. It stays silent for the source file, for files that aren't locale files, and for clean results, and always exits 0, even for a typo in its own flags, so a half-written file never breaks the agent's turn. Over a limit, it adds a "skipped" note instead of going quiet. For speed on every edit, install it once (`npm i -D github:zafmy/locale-drift#v0.1.0`) and use `npx locale-drift --hook`.
 
 ## In CI
 
@@ -89,7 +89,7 @@ When the agent edits a target locale file, locale-drift compares that one file w
 
 ## Scope
 
-JSON locale files only, up to 5000 keys per file, 10 target locales per run and 5 MB per file. Over a limit it stops with exit 2 rather than checking part of the file. It does not validate full ICU syntax, plural branch completeness, unused keys in your code, or translation quality, and it never translates anything. For deep ICU and plural checks use i18next-cli `lint` or inlang `check` alongside it.
+JSON locale files only, up to 5000 keys per file, 10 target locales per run and 5 MB per file. Over a limit it stops with exit 2 rather than checking part of the file. If a source file is not valid JSON, its targets are listed as not checked rather than passed. It does not validate full ICU syntax, ICU plural branch completeness, unused keys in your code, or translation quality, and it never translates anything. For deep ICU and plural checks use i18next-cli `lint` or inlang `check` alongside it.
 
 ## Develop
 

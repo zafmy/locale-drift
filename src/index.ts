@@ -103,15 +103,15 @@ function hook(source: string): void {
   const pair = [{ file: shown(sourcePath), text: readFileSync(sourcePath, 'utf8'), ...classify(sourcePath)! }];
   const written = { file: shown(target), text: readFileSync(target, 'utf8'), ...c };
   const head = `locale-drift: ${shown(target)} vs ${shown(sourcePath)}`;
+  // Over a limit or a broken source: say why it was skipped rather than go quiet, but don't block.
+  const skipped = (why: string): void => void process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${head}\nskipped: ${why}` } })}\n`);
   let all: Finding[];
   try {
     all = compare(pair, [written]);
   } catch (e) {
-    // Over a limit: say so rather than go quiet, but don't block.
-    const context = `${head}\nskipped: ${e instanceof Error ? e.message : String(e)}`;
-    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } })}\n`);
-    return;
+    return skipped(e instanceof Error ? e.message : String(e));
   }
+  if (all.some((f) => f.file === pair[0].file && f.rule === 'invalid-json')) return skipped(`${pair[0].file} is not valid JSON`);
   // Only the file the agent just wrote: a broken source is not this edit's fault.
   const findings = all.filter((f) => f.file === written.file).filter(keep);
   if (!findings.length) return;
@@ -171,11 +171,18 @@ const errors = findings.filter((f) => f.severity === 'error').length;
 const warnings = findings.length - errors;
 const ok = errors === 0 && (!values.strict || warnings === 0);
 const shownFiles = [...new Set([...targets.map((t) => t.file), ...findings.map((f) => f.file)])];
+// Targets whose source file did not parse were never compared, so they must not look clean.
+const brokenSources = sources.filter((s) => findings.some((f) => f.file === s.file && f.rule === 'invalid-json'));
+const unchecked = targets.filter((t) => brokenSources.some((s) => s.ns === t.ns)).map((t) => t.file);
 
 function text(): string {
   const lines: string[] = [];
   for (const file of shownFiles) {
     const mine = findings.filter((f) => f.file === file);
+    if (!mine.length && unchecked.includes(file)) {
+      lines.push(`- ${file} (not checked: its source is not valid JSON)`);
+      continue;
+    }
     lines.push(`${mine.length ? '✖' : '✔'} ${file}`);
     lines.push(...mine.map((f) => `  ${f.severity === 'error' ? 'error' : 'warn '} ${line(f)}`));
   }
@@ -183,6 +190,6 @@ function text(): string {
   return lines.join('\n');
 }
 
-const report = { version: 1, ok, source: values.source, locales, files: shownFiles, summary: { errors, warnings }, findings };
+const report = { version: 1, ok, source: values.source, locales, files: shownFiles, unchecked, summary: { errors, warnings }, findings };
 const out = values.json ? JSON.stringify(report, null, 2) : text();
 process.stdout.write(`${out}\n`, () => process.exit(ok ? 0 : 1));

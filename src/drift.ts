@@ -166,7 +166,8 @@ export function tags(s: string): string[] {
 function words(s: string, format: Format): number {
   let rest = format === 'icu' ? icuParse(s).text : s.replace(/\$t\([^)]*\)/g, ' ').replace(/\{\{[^}]*\}\}/g, ' ');
   rest = rest.replace(TAG, ' ').replace(/\bhttps?:\/\/\S+|\bwww\.\S+|\S+@\S+\.\S+/g, ' ');
-  return (rest.match(/\p{L}[\p{L}\p{M}'’]+/gu) ?? []).length;
+  // Distinct words, so the same loanword in every plural branch (one {# km} other {# km}) is still one.
+  return new Set(rest.match(/\p{L}[\p{L}\p{M}'’]+/gu) ?? []).size;
 }
 
 // en and en-GB are one language; zh-Hans and zh-Hant are not, because the script differs.
@@ -190,10 +191,10 @@ function pluralCategories(locale: string, type: Intl.PluralRuleType): Set<string
 const PLURAL_KEY = /^(.*?)(_ordinal)?_(zero|one|two|few|many|other)$/;
 
 // For an i18next plural key (it has an _other sibling), whether the target language uses that form.
+// _zero counts only where CLDR has a zero form (ar, lv); elsewhere it is i18next's optional extra.
 function pluralForm(key: string, keys: Map<string, unknown>, locale: string): 'used' | 'unused' | undefined {
   const m = PLURAL_KEY.exec(key);
   if (!m || !keys.has(`${m[1]}${m[2] ?? ''}_other`)) return undefined;
-  if (m[3] === 'zero' && !m[2]) return 'unused'; // i18next's _zero is always optional
   const cats = pluralCategories(locale, m[2] ? 'ordinal' : 'cardinal');
   return !cats || cats.has(m[3]) ? 'used' : 'unused';
 }
@@ -216,9 +217,12 @@ function parse(file: LocaleFile, findings: Finding[]): Parsed | undefined {
 
 // A whole {{name}} or {{name, format}}, or $t(…). ICU's "one {{name} liked}" is not one.
 const I18NEXT = /\{\{\s*-?\s*[\w.$:-]+\s*(?:,[^{}]*)?\}\}|\$t\(/;
+// A valid ICU plural/select can contain {{n}} as a branch body (other {{n}}); that is not i18next.
+const ICU_BRANCHES = /\{\s*[\w.$-]+\s*,\s*(?:plural|select|selectordinal)\s*,/;
+const looksI18next = (v: string) => I18NEXT.test(v) && !(ICU_BRANCHES.test(v) && icuParse(v).ok);
 
 function detectFormat(sources: Parsed[]): Format {
-  for (const p of sources) for (const v of p.flat.leaves.values()) if (typeof v === 'string' && I18NEXT.test(v)) return 'i18next';
+  for (const p of sources) for (const v of p.flat.leaves.values()) if (typeof v === 'string' && looksI18next(v)) return 'i18next';
   return 'icu';
 }
 
@@ -305,6 +309,17 @@ function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
       const sourcePlural = m && S.leaves.has(`${m[1]}${m[2] ?? ''}_other`);
       const allowed = sourcePlural && (pluralForm(k, T.leaves, locale) === 'used' || (m[3] === 'zero' && !m[2]));
       if (!allowed) add(k, 'extra', 'is not in the source; remove it or add it to the source');
+    }
+  }
+  // Plural forms the target language needs that the source lacks: ru _few/_many, ar _two.
+  for (const k of S.leaves.keys()) {
+    const m = PLURAL_KEY.exec(k);
+    if (!m || m[3] !== 'other') continue;
+    const base = `${m[1]}${m[2] ?? ''}`;
+    if (![...T.leaves.keys()].some((t) => t.startsWith(`${base}_`))) continue; // already reported as missing
+    for (const cat of pluralCategories(locale, m[2] ? 'ordinal' : 'cardinal') ?? []) {
+      const need = `${base}_${cat}`;
+      if (!S.leaves.has(need) && !T.leaves.has(need)) add(need, 'missing', `is missing; ${locale} uses the "${cat}" plural form`);
     }
   }
   return out;
