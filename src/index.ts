@@ -107,7 +107,10 @@ function hook(source: string): void {
   const skipped = (why: string): void => void process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${head}\nskipped: ${why}` } })}\n`);
   let all: Finding[];
   try {
-    all = compare(pair, [written]);
+    // Every source namespace decides the syntax, as in a full run, so hook and CLI agree.
+    const siblings = c.ns ? readdirSync(dirname(sourcePath)).filter((f) => f.endsWith('.json')).map((f) => join(dirname(sourcePath), f)) : [sourcePath];
+    const detectFrom = siblings.map((p) => ({ file: shown(p), text: readFileSync(p, 'utf8'), ...classify(p)! }));
+    all = compare(pair, [written], detectFrom);
   } catch (e) {
     return skipped(e instanceof Error ? e.message : String(e));
   }

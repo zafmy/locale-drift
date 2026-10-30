@@ -167,7 +167,7 @@ function words(s: string, format: Format): number {
   let rest = format === 'icu' ? icuParse(s).text : s.replace(/\$t\([^)]*\)/g, ' ').replace(/\{\{[^}]*\}\}/g, ' ');
   rest = rest.replace(TAG, ' ').replace(/\bhttps?:\/\/\S+|\bwww\.\S+|\S+@\S+\.\S+/g, ' ');
   // Distinct words, so the same loanword in every plural branch (one {# km} other {# km}) is still one.
-  return new Set((rest.match(/\p{L}[\p{L}\p{M}'’]+/gu) ?? []).map((w) => w.toLocaleLowerCase())).size;
+  return new Set((rest.match(/\p{L}[\p{L}\p{M}'’]+/gu) ?? []).map((w) => w.toLowerCase())).size;
 }
 
 // en and en-GB are one language; zh-Hans and zh-Hant are not, because the script differs.
@@ -196,9 +196,9 @@ const isPluralSet = (base: string, keys: Map<string, unknown>) =>
 
 // For a key in an i18next plural set, whether the target language uses that form.
 // _zero counts only where CLDR has a zero form (ar, lv); elsewhere it is i18next's optional extra.
-function pluralForm(key: string, keys: Map<string, unknown>, locale: string, format: Format): 'used' | 'unused' | undefined {
+function pluralForm(key: string, keys: Map<string, unknown>, locale: string, suffixPlurals: boolean): 'used' | 'unused' | undefined {
   const m = PLURAL_KEY.exec(key);
-  if (format !== 'i18next' || !m || !isPluralSet(`${m[1]}${m[2] ?? ''}`, keys)) return undefined;
+  if (!suffixPlurals || !m || !isPluralSet(`${m[1]}${m[2] ?? ''}`, keys)) return undefined;
   const cats = pluralCategories(locale, m[2] ? 'ordinal' : 'cardinal');
   return !cats || cats.has(m[3]) ? 'used' : 'unused';
 }
@@ -225,9 +225,16 @@ const I18NEXT = /\{\{\s*-?\s*[\w.$:-]+\s*(?:,[^{}]*)?\}\}|\$t\(/;
 const ICU_BRANCHES = /\{\s*[\w.$-]+\s*,\s*(?:plural|select|selectordinal)\s*,/;
 const looksI18next = (v: string) => I18NEXT.test(v) && !(ICU_BRANCHES.test(v) && icuParse(v).ok);
 
-function detectFormat(sources: Parsed[]): Format {
-  for (const p of sources) for (const v of p.flat.leaves.values()) if (typeof v === 'string' && looksI18next(v)) return 'i18next';
-  return 'icu';
+type Mode = { format: Format; suffixPlurals: boolean };
+
+// Placeholder syntax: i18next if any source value uses {{…}} or $t(. Suffix plurals (_one/_other keys) apply
+// unless the project already writes plurals the ICU way, so a plain "File"/"Files" set still counts.
+function detectMode(sources: Parsed[]): Mode {
+  const values = sources.flatMap((p) => [...p.flat.leaves.values()].filter((v): v is string => typeof v === 'string'));
+  return {
+    format: values.some(looksI18next) ? 'i18next' : 'icu',
+    suffixPlurals: !values.some((v) => ICU_BRANCHES.test(v) && icuParse(v).ok),
+  };
 }
 
 const show = (name: string, format: Format) => (format === 'icu' ? `{${name}}` : name.startsWith('$t(') ? name : `{{${name}}}`);
@@ -273,7 +280,7 @@ function leafPrefix(key: string, leaves: Map<string, unknown>): string | undefin
   return undefined;
 }
 
-function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
+function comparePair(src: Parsed, tgt: Parsed, { format, suffixPlurals }: Mode): Finding[] {
   const { locale, file, ns } = tgt.file;
   const sameLanguage = language(locale) === language(src.file.locale);
   const S = src.flat;
@@ -301,7 +308,7 @@ function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
     const prefix = leafPrefix(k, T.leaves);
     if (T.containers.has(k)) type(k);
     else if (prefix !== undefined && !S.leaves.has(prefix)) type(prefix);
-    else if (pluralForm(k, S.leaves, locale, format) !== 'unused') add(k, 'missing', 'is missing');
+    else if (pluralForm(k, S.leaves, locale, suffixPlurals) !== 'unused') add(k, 'missing', 'is missing');
   }
   for (const k of T.leaves.keys()) {
     if (S.leaves.has(k)) continue;
@@ -310,14 +317,14 @@ function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
     else if (prefix !== undefined && !T.leaves.has(prefix)) type(prefix);
     else {
       const m = PLURAL_KEY.exec(k);
-      const sourcePlural = format === 'i18next' && m && isPluralSet(`${m[1]}${m[2] ?? ''}`, S.leaves);
-      const allowed = sourcePlural && (pluralForm(k, T.leaves, locale, format) === 'used' || (m[3] === 'zero' && !m[2]));
+      const sourcePlural = suffixPlurals && m && isPluralSet(`${m[1]}${m[2] ?? ''}`, S.leaves);
+      const allowed = sourcePlural && (pluralForm(k, T.leaves, locale, suffixPlurals) === 'used' || (m[3] === 'zero' && !m[2]));
       if (!allowed) add(k, 'extra', 'is not in the source; remove it or add it to the source');
     }
   }
   // Plural forms the target language needs that the source lacks (ru _few/_many, ar _two). A warning,
   // because i18next falls back to _other; some, like fr _many, only show for counts in the millions.
-  if (format === 'i18next' && !sameLanguage) {
+  if (suffixPlurals && !sameLanguage) {
     for (const k of S.leaves.keys()) {
       const m = PLURAL_KEY.exec(k);
       if (!m || m[3] !== 'other') continue;
@@ -334,10 +341,11 @@ function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
 }
 
 // Compares every target locale with the source, file by file (namespace by namespace).
-export function compare(sources: LocaleFile[], targets: LocaleFile[]): Finding[] {
+// detectFrom: the source files that decide the syntax; the hook passes every namespace, not just the edited one.
+export function compare(sources: LocaleFile[], targets: LocaleFile[], detectFrom: LocaleFile[] = sources): Finding[] {
   const findings: Finding[] = [];
   const parsedSources = sources.map((f) => parse(f, findings));
-  const format = detectFormat(parsedSources.filter((p): p is Parsed => !!p));
+  const mode = detectMode(detectFrom === sources ? parsedSources.filter((p): p is Parsed => !!p) : detectFrom.flatMap((f) => parse(f, []) ?? []));
   const locales = [...new Set(targets.map((t) => t.locale))];
   for (const locale of locales) {
     const mine = targets.filter((t) => t.locale === locale);
@@ -350,7 +358,7 @@ export function compare(sources: LocaleFile[], targets: LocaleFile[]): Finding[]
       }
       const s = parsedSources[i];
       const t = parse(tgt, findings);
-      if (s && t) findings.push(...comparePair(s, t, format));
+      if (s && t) findings.push(...comparePair(s, t, mode));
     }
     for (const t of mine) {
       if (!sources.some((s) => s.ns === t.ns)) {

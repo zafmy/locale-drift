@@ -343,8 +343,9 @@ test('round3: forms the target needs but the source lacks are warnings (i18next 
   const s = { items_one: '{{count}} item', items_other: '{{count}} items' };
   const f = compare([en(s)], [loc('fr')({ items_one: '{{count}} article', items_other: '{{count}} articles' })]);
   assert.deepEqual(f.map((x) => `${x.key}:${x.rule}:${x.severity}`), ['items_many:missing:warning']);
-  // An ICU project never needs i18next suffix keys.
-  assert.deepEqual(compare([en({ ...s, hello: 'Hello {name}', items_one: '{n} item', items_other: '{n} items' })], [loc('ru')({ hello: 'Привет {name}', items_one: '{n} x', items_other: '{n} y' })]), []);
+  // A project that writes plurals the ICU way never needs i18next suffix keys.
+  const icu = { n: '{count, plural, one {# file} other {# files}}', items_one: '{n} item', items_other: '{n} items' };
+  assert.deepEqual(compare([en(icu)], [loc('ru')({ n: '{count, plural, other {# x}}', items_one: '{n} x', items_other: '{n} y' })]), []);
 });
 
 test('round3: distinct words ignore case', () => {
@@ -364,4 +365,21 @@ test('round3 cli: --ignore invalid-json does not turn unchecked targets into pas
   const r = exec(['--ignore', 'invalid-json'], { cwd: dir });
   assert.notEqual(r.status, 0);
   assert.match(r.stdout, /not checked/);
+});
+
+// Round four of the review.
+test('round4: plural sets work without any {{…}} in the source', () => {
+  const s = { files_one: 'File', files_other: 'Files' };
+  assert.deepEqual(run(s, { files_other: 'Fail' }), []);
+  assert.deepEqual(compare([en(s)], [loc('ru')({ files_one: 'Файл', files_other: 'Файлы' })]).map((x) => `${x.key}:${x.severity}`), ['files_few:warning', 'files_many:warning']);
+});
+
+test('round4 hook: a namespace agrees with the CLI when another namespace decides the format', () => {
+  const dir = project({
+    'locales/en/common.json': { hello: 'Hello {{name}}' }, 'locales/ms/common.json': { hello: 'Hai {{name}}' },
+    'locales/en/inventory.json': { files_one: 'File', files_other: 'Files', n: 'Hi {name}' }, 'locales/ms/inventory.json': { files_other: 'Fail', n: 'Hai {nama}' },
+  });
+  // As i18next (decided by common.json), {name} is plain text, so renaming it is not a placeholder error.
+  assert.equal(exec(['locales'], { cwd: dir }).status, 0);
+  assert.equal(hook(dir, 'locales/ms/inventory.json').stdout, '');
 });
