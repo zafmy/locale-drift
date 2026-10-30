@@ -91,6 +91,8 @@ When the agent edits a target locale file, locale-drift compares that one file w
 
 JSON locale files only, up to 5000 keys per file, 10 target locales per run and 5 MB per file. Over a limit it stops with exit 2 rather than checking part of the file. If a source file is not valid JSON, its targets are listed as not checked rather than passed. It does not validate full ICU syntax, ICU plural branch completeness, unused keys in your code, or translation quality, and it never translates anything. For deep ICU and plural checks use i18next-cli `lint` or inlang `check` alongside it.
 
+The syntax is guessed from the source, once per run: i18next if any value has `{{…}}` or `$t(`, otherwise ICU. i18next suffix plurals (`_one`/`_other` keys) are checked in i18next projects and in projects with no ICU plural messages. A project that mixes both styles, or quotes `'{{x}}'` inside ICU text, can be guessed wrong; split it by folder or use `--ignore` for the rule that misfires.
+
 ## Develop
 
 ```bash
