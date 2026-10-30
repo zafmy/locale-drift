@@ -227,15 +227,22 @@ const looksI18next = (v: string) => I18NEXT.test(v) && !(ICU_BRANCHES.test(v) &&
 
 type Mode = { format: Format; suffixPlurals: boolean };
 
-// Placeholder syntax: i18next if any source value uses {{…}} or $t(. Suffix plurals (_one/_other keys) apply
-// unless the project already writes plurals the ICU way, so a plain "File"/"Files" set still counts.
+// Placeholder syntax: i18next if any source value uses {{…}} or $t(. Suffix plurals (_one/_other keys) apply in
+// i18next projects, and in projects with no ICU plural at all, so a plain "File"/"Files" set still counts.
 function detectMode(sources: Parsed[]): Mode {
   const values = sources.flatMap((p) => [...p.flat.leaves.values()].filter((v): v is string => typeof v === 'string'));
-  return {
-    format: values.some(looksI18next) ? 'i18next' : 'icu',
-    suffixPlurals: !values.some((v) => ICU_BRANCHES.test(v) && icuParse(v).ok),
-  };
+  const format: Format = values.some(looksI18next) ? 'i18next' : 'icu';
+  return { format, suffixPlurals: format === 'i18next' || !values.some((v) => ICU_BRANCHES.test(v) && icuParse(v).ok) };
 }
+
+// Detection-only files: one that is too big or broken is skipped, never fatal.
+const parseQuietly = (f: LocaleFile): Parsed[] => {
+  try {
+    return [parse(f, []) ?? []].flat();
+  } catch {
+    return [];
+  }
+};
 
 const show = (name: string, format: Format) => (format === 'icu' ? `{${name}}` : name.startsWith('$t(') ? name : `{{${name}}}`);
 const diff = (a: Iterable<string>, b: Iterable<string>) => {
@@ -345,7 +352,7 @@ function comparePair(src: Parsed, tgt: Parsed, { format, suffixPlurals }: Mode):
 export function compare(sources: LocaleFile[], targets: LocaleFile[], detectFrom: LocaleFile[] = sources): Finding[] {
   const findings: Finding[] = [];
   const parsedSources = sources.map((f) => parse(f, findings));
-  const mode = detectMode(detectFrom === sources ? parsedSources.filter((p): p is Parsed => !!p) : detectFrom.flatMap((f) => parse(f, []) ?? []));
+  const mode = detectMode(detectFrom === sources ? parsedSources.filter((p): p is Parsed => !!p) : detectFrom.flatMap(parseQuietly));
   const locales = [...new Set(targets.map((t) => t.locale))];
   for (const locale of locales) {
     const mine = targets.filter((t) => t.locale === locale);

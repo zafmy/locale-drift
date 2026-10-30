@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { classify, compare, isLocale, MAX_TARGETS, RULES, type Finding, type LocaleFile } from './drift.js';
+import { classify, compare, isLocale, MAX_BYTES, MAX_TARGETS, RULES, type Finding, type LocaleFile } from './drift.js';
 
 const FOLDERS = ['messages', 'locales', 'src/locales', 'src/i18n', 'src/lang', 'i18n', 'lang', 'public/locales'];
 const USAGE = `Usage: locale-drift [--source <locale>] [--json] [--strict] [--ignore <rule>]... [path...]
@@ -108,8 +108,16 @@ function hook(source: string): void {
   let all: Finding[];
   try {
     // Every source namespace decides the syntax, as in a full run, so hook and CLI agree.
+    // Only regular files within the size limit; one unreadable sibling must not silence this file.
     const siblings = c.ns ? readdirSync(dirname(sourcePath)).filter((f) => f.endsWith('.json')).map((f) => join(dirname(sourcePath), f)) : [sourcePath];
-    const detectFrom = siblings.map((p) => ({ file: shown(p), text: readFileSync(p, 'utf8'), ...classify(p)! }));
+    const detectFrom = siblings.flatMap((p) => {
+      try {
+        const st = statSync(p);
+        return st.isFile() && st.size <= MAX_BYTES ? [{ file: shown(p), text: readFileSync(p, 'utf8'), ...classify(p)! }] : [];
+      } catch {
+        return [];
+      }
+    });
     all = compare(pair, [written], detectFrom);
   } catch (e) {
     return skipped(e instanceof Error ? e.message : String(e));

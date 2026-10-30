@@ -383,3 +383,19 @@ test('round4 hook: a namespace agrees with the CLI when another namespace decide
   assert.equal(exec(['locales'], { cwd: dir }).status, 0);
   assert.equal(hook(dir, 'locales/ms/inventory.json').stdout, '');
 });
+
+// Round five of the review.
+test('round5: one ICU plural in an i18next project does not switch off suffix plurals', () => {
+  const s = { cart: '{count, plural, one {# item} other {# items}}', files_one: '{{count}} file', files_other: '{{count}} files' };
+  assert.deepEqual(run(s, { cart: '{count, plural, other {# barang}}', files_other: '{{count}} fail' }), []);
+});
+
+test('round5 hook: an unreadable, oversized or non-file sibling namespace does not silence the edited file', () => {
+  const dir = project({ 'locales/en/common.json': { hi: 'Hi {{name}}' }, 'locales/ms/common.json': { hi: 'Hai {{nama}}' } });
+  mkdirSync(join(dir, 'locales/en/folder.json'));
+  writeFileSync(join(dir, 'locales/en/many.json'), JSON.stringify(Object.fromEntries(Array.from({ length: MAX_KEYS + 1 }, (_, i) => [`k${i}`, 'x']))));
+  writeFileSync(join(dir, 'locales/en/locked.json'), '{}', { mode: 0o000 });
+  const out = JSON.parse(hook(dir, 'locales/ms/common.json').stdout);
+  assert.equal(out.decision, 'block');
+  assert.match(out.reason, /nama/);
+});
