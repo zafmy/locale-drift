@@ -1,0 +1,40 @@
+{
+  "name": "locale-drift",
+  "version": "0.1.0",
+  "description": "Check translations your AI agent wrote: missing keys, untranslated copies, broken placeholders and tags in JSON locale files",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "locale-drift": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test dist/*.test.js",
+    "prepare": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zafmy/locale-drift.git"
+  },
+  "keywords": [
+    "i18n",
+    "l10n",
+    "translation",
+    "lint",
+    "next-intl",
+    "i18next",
+    "bahasa-melayu",
+    "ai-agents",
+    "claude-code"
+  ],
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2"
+  }
+}

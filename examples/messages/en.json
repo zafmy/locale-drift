@@ -1,0 +1,6 @@
+{
+  "nav": { "home": "Home", "settings": "Settings", "status": "Status" },
+  "greeting": "Hello, {name}! You have {count, plural, one {# new message} other {# new messages}}.",
+  "cart": { "empty": "Your cart is empty", "checkout": "Pay with <b>DuitNow</b> or card" },
+  "support": "Email us at help@example.com"
+}

@@ -1,0 +1,6 @@
+{
+  "nav": { "home": "Utama", "settings": "Tetapan", "status": "Status" },
+  "greeting": "Hai, {name}! Anda ada {count, plural, other {# mesej baharu}}.",
+  "cart": { "empty": "Troli anda kosong", "checkout": "Bayar dengan <b>DuitNow</b> atau kad" },
+  "support": "E-mel kami di help@example.com"
+}
