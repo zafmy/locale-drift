@@ -1,3 +1,5 @@
+![locale-drift catches a renamed placeholder, a dropped tag, copied English and a missing key in ms.json, then passes once the file is fixed](docs/cover.png)
+
 # locale-drift
 
 [![CI](https://github.com/zafmy/locale-drift/actions/workflows/ci.yml/badge.svg)](https://github.com/zafmy/locale-drift/actions/workflows/ci.yml)
