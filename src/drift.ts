@@ -34,8 +34,9 @@ export function classify(path: string): { locale: string; ns?: string } | undefi
   if (!path.endsWith('.json')) return undefined;
   const name = basename(path, '.json');
   const parent = basename(dirname(path));
-  if (isLocale(parent)) return { locale: parent, ns: name };
-  return isLocale(name) ? { locale: name } : undefined;
+  // The file name wins, so src/ms.json is ms even though "src" is also a language code.
+  if (isLocale(name)) return { locale: name };
+  return isLocale(parent) ? { locale: parent, ns: name } : undefined;
 }
 
 type Flat = { leaves: Map<string, unknown>; containers: Set<string> };
@@ -51,29 +52,46 @@ function flatten(value: unknown, prefix: string, out: Flat): Flat {
   return out;
 }
 
-// Walks ICU MessageFormat: argument names from every plural/select branch, never branch text or #.
-function icuArgs(s: string): { names: Set<string>; ok: boolean } {
+// Walks ICU MessageFormat: argument names from every plural/select branch, plus the literal text
+// (branch bodies included, selectors and # left out) for the untranslated check.
+function icuParse(s: string): { names: Set<string>; ok: boolean; text: string } {
   const names = new Set<string>();
   let i = 0;
   let ok = true;
-  const skipQuoted = (inPlural: boolean): boolean => {
-    if (s[i] !== "'") return false;
-    if (s[i + 1] === "'") i += 2;
-    else if (s[i + 1] === '{' || s[i + 1] === '}' || (inPlural && s[i + 1] === '#')) {
-      const end = s.indexOf("'", i + 1);
-      i = end === -1 ? s.length : end + 1;
-    } else i++;
-    return true;
+  let text = '';
+  // An apostrophe quotes a following { } (or # in a plural) up to the next lone '; '' is a literal '.
+  const quoted = (inPlural: boolean): string | undefined => {
+    if (s[i] !== "'") return undefined;
+    if (s[i + 1] === "'") {
+      i += 2;
+      return "'";
+    }
+    if (!(s[i + 1] === '{' || s[i + 1] === '}' || (inPlural && s[i + 1] === '#'))) {
+      i++;
+      return "'";
+    }
+    let lit = '';
+    for (i++; i < s.length; i++) {
+      if (s[i] !== "'") lit += s[i];
+      else if (s[i + 1] === "'") lit += s[++i];
+      else break;
+    }
+    i++;
+    return lit;
   };
   const message = (inPlural: boolean, nested: boolean): void => {
     while (i < s.length) {
-      if (skipQuoted(inPlural)) continue;
+      const lit = quoted(inPlural);
+      if (lit !== undefined) {
+        text += lit;
+        continue;
+      }
       const c = s[i++];
       if (c === '{') argument();
       else if (c === '}') {
         if (nested) return;
         ok = false;
-      }
+      } else if (!(inPlural && c === '#')) text += c;
     }
     if (nested) ok = false;
   };
@@ -83,6 +101,7 @@ function icuArgs(s: string): { names: Set<string>; ok: boolean } {
     return s.slice(start, i).trim();
   };
   const argument = (): void => {
+    text += ' ';
     const name = readUntil(',}{');
     if (i >= s.length || s[i] === '{' || !name) {
       ok = false;
@@ -102,6 +121,7 @@ function icuArgs(s: string): { names: Set<string>; ok: boolean } {
         if (i >= s.length) break;
         if (s[i++] === '}') return;
         message(type !== 'select', true);
+        text += ' ';
       }
       ok = false;
       return;
@@ -109,7 +129,7 @@ function icuArgs(s: string): { names: Set<string>; ok: boolean } {
     // A style such as ::currency/MYR: skip to the closing brace.
     let depth = 1;
     while (i < s.length && depth) {
-      if (skipQuoted(false)) continue;
+      if (quoted(false) !== undefined) continue;
       if (s[i] === '{') depth++;
       else if (s[i] === '}') depth--;
       i++;
@@ -117,35 +137,47 @@ function icuArgs(s: string): { names: Set<string>; ok: boolean } {
     if (depth) ok = false;
   };
   message(false, false);
-  return { names, ok };
+  return { names, ok, text };
 }
 
 const count = (s: string, sub: string) => s.split(sub).length - 1;
 
 export function argNames(s: string, format: Format): { names: Set<string>; ok: boolean } {
-  if (format === 'icu') return icuArgs(s);
+  if (format === 'icu') {
+    const { names, ok } = icuParse(s);
+    return { names, ok };
+  }
   const names = new Set<string>();
   for (const m of s.matchAll(/\{\{\s*-?\s*([^,}\s]+)[^}]*\}\}/g)) names.add(m[1]);
   for (const m of s.matchAll(/\$t\(\s*([^,)\s]+)[^)]*\)/g)) names.add(`$t(${m[1]})`);
   return { names, ok: count(s, '{{') === count(s, '}}') };
 }
 
-const TAG = /<(\/?)(?:([A-Za-z][\w-]*)(?:\s[^<>]*)?|(\d+))\s*(\/?)>/g;
+const TAG = /<(\/?)(?:([A-Za-z][\w-]*)(?:\s[^<>]*?)?|(\d+))\s*(\/?)>/g;
 
-// Tag names as a sorted multiset: <b>, </b>, <br/>, and react-i18next's <0>, <1/>. Attributes are ignored.
+// The distinct tags: <b>, </b>, <br/>, and react-i18next's <0>, <1/>. Attributes are ignored.
+// A set, not a count, because a plural with fewer branches (ms has only "other") repeats them fewer times.
 export function tags(s: string): string[] {
-  return [...s.matchAll(TAG)].map((m) => `<${m[1]}${m[2] ?? m[3]}${m[4]}>`).sort();
+  return [...new Set([...s.matchAll(TAG)].map((m) => `<${m[1]}${m[2] ?? m[3]}${m[4]}>`))].sort();
 }
 
 // Letter words left once placeholders, tags, links and numbers are gone. One word alone is often a valid loanword.
-function words(s: string): number {
-  let rest = s.replace(TAG, ' ').replace(/\$t\([^)]*\)/g, ' ').replace(/\{\{[^}]*\}\}/g, ' ');
-  for (let prev = ''; prev !== rest;) [prev, rest] = [rest, rest.replace(/\{[^{}]*\}/g, ' ')];
-  rest = rest.replace(/\bhttps?:\/\/\S+|\bwww\.\S+|\S+@\S+\.\S+/g, ' ');
+// For ICU it counts the text of every plural/select branch, so a copied plural message is caught.
+function words(s: string, format: Format): number {
+  let rest = format === 'icu' ? icuParse(s).text : s.replace(/\$t\([^)]*\)/g, ' ').replace(/\{\{[^}]*\}\}/g, ' ');
+  rest = rest.replace(TAG, ' ').replace(/\bhttps?:\/\/\S+|\bwww\.\S+|\S+@\S+\.\S+/g, ' ');
   return (rest.match(/\p{L}[\p{L}\p{M}'’]+/gu) ?? []).length;
 }
 
-const lang = (locale: string) => locale.split(/[-_]/)[0].toLowerCase();
+// en and en-GB are one language; zh-Hans and zh-Hant are not, because the script differs.
+function language(locale: string): string {
+  try {
+    const l = new Intl.Locale(locale.replace(/_/g, '-')).maximize();
+    return `${l.language}-${l.script ?? ''}`;
+  } catch {
+    return locale.split(/[-_]/)[0].toLowerCase();
+  }
+}
 
 function pluralCategories(locale: string, type: Intl.PluralRuleType): Set<string> | undefined {
   try {
@@ -169,7 +201,7 @@ function pluralForm(key: string, keys: Map<string, unknown>, locale: string): 'u
 type Parsed = { file: LocaleFile; flat: Flat };
 
 function parse(file: LocaleFile, findings: Finding[]): Parsed | undefined {
-  if (file.text.length > MAX_BYTES) throw new Error(`${file.file} is larger than ${MAX_BYTES / 1_000_000} MB`);
+  if (Buffer.byteLength(file.text, 'utf8') > MAX_BYTES) throw new Error(`${file.file} is larger than ${MAX_BYTES / 1_000_000} MB`);
   let value: unknown;
   try {
     value = JSON.parse(file.text.replace(/^﻿/, ''));
@@ -182,8 +214,11 @@ function parse(file: LocaleFile, findings: Finding[]): Parsed | undefined {
   return { file, flat };
 }
 
+// A whole {{name}} or {{name, format}}, or $t(…). ICU's "one {{name} liked}" is not one.
+const I18NEXT = /\{\{\s*-?\s*[\w.$:-]+\s*(?:,[^{}]*)?\}\}|\$t\(/;
+
 function detectFormat(sources: Parsed[]): Format {
-  for (const p of sources) for (const v of p.flat.leaves.values()) if (typeof v === 'string' && /\{\{.+?\}\}/.test(v)) return 'i18next';
+  for (const p of sources) for (const v of p.flat.leaves.values()) if (typeof v === 'string' && I18NEXT.test(v)) return 'i18next';
   return 'icu';
 }
 
@@ -216,7 +251,7 @@ function compareValues(s: string, t: string, format: Format, sameLanguage: boole
   if (lostTags.length || addedTags.length) {
     out.push(['tag', [lostTags.length && `missing ${lostTags.join(' ')}`, addedTags.length && `unexpected ${addedTags.join(' ')}`].filter(Boolean).join('; ')]);
   }
-  if (!sameLanguage && s === t && words(s) >= 2) out.push(['untranslated', 'is the same as the source; translate it or --ignore untranslated']);
+  if (!sameLanguage && s === t && words(s, format) >= 2) out.push(['untranslated', 'is the same as the source; translate it or --ignore untranslated']);
   return out;
 }
 
@@ -232,7 +267,7 @@ function leafPrefix(key: string, leaves: Map<string, unknown>): string | undefin
 
 function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
   const { locale, file, ns } = tgt.file;
-  const sameLanguage = lang(locale) === lang(src.file.locale);
+  const sameLanguage = language(locale) === language(src.file.locale);
   const S = src.flat;
   const T = tgt.flat;
   const out: Finding[] = [];
@@ -254,20 +289,22 @@ function comparePair(src: Parsed, tgt: Parsed, format: Format): Finding[] {
       }
       continue;
     }
+    // A prefix that is a leaf on both sides is a flat dotted key (react-intl "home.title"), not a shape change.
     const prefix = leafPrefix(k, T.leaves);
     if (T.containers.has(k)) type(k);
-    else if (prefix !== undefined) type(prefix);
+    else if (prefix !== undefined && !S.leaves.has(prefix)) type(prefix);
     else if (pluralForm(k, S.leaves, locale) !== 'unused') add(k, 'missing', 'is missing');
   }
   for (const k of T.leaves.keys()) {
     if (S.leaves.has(k)) continue;
     const prefix = leafPrefix(k, S.leaves);
     if (S.containers.has(k)) type(k);
-    else if (prefix !== undefined) type(prefix);
+    else if (prefix !== undefined && !T.leaves.has(prefix)) type(prefix);
     else {
       const m = PLURAL_KEY.exec(k);
       const sourcePlural = m && S.leaves.has(`${m[1]}${m[2] ?? ''}_other`);
-      if (!(sourcePlural && pluralForm(k, T.leaves, locale) === 'used')) add(k, 'extra', 'is not in the source; remove it or add it to the source');
+      const allowed = sourcePlural && (pluralForm(k, T.leaves, locale) === 'used' || (m[3] === 'zero' && !m[2]));
+      if (!allowed) add(k, 'extra', 'is not in the source; remove it or add it to the source');
     }
   }
   return out;

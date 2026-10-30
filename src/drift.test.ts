@@ -206,3 +206,83 @@ test('hook: namespaced file is checked only against its own namespace', () => {
   });
   assert.equal(hook(dir, 'public/locales/ms/common.json').stdout, '');
 });
+
+// Regressions found in adversarial review.
+test('review: an ICU plural branch that starts with an argument stays ICU, so other placeholders are still checked', () => {
+  const s = { p: '{n, plural, one {{name} liked this} other {{name} and # others liked this}}', b: 'Hello {name}' };
+  const t = { p: '{n, plural, other {{name} dan # lagi suka ini}}', b: 'Helo {nama}' };
+  assert.deepEqual(rules(run(s, t)), ['b:placeholder']);
+});
+
+test('review: $t() without {{ }} is still i18next, so a dropped $t() is caught', () => {
+  assert.deepEqual(rules(run({ a: 'See $t(common.terms) first' }, { a: 'Lihat dahulu' })), ['a:placeholder']);
+});
+
+test('review: tags inside plural branches compare as a set, so ms with only "other" is fine', () => {
+  assert.deepEqual(run({ a: '{n, plural, one {<b>#</b> item} other {<b>#</b> items}}' }, { a: '{n, plural, other {<b>#</b> item}}' }), []);
+});
+
+test("review: '' inside an ICU quoted literal does not end the quote", () => {
+  assert.deepEqual(argNames("'{it''s}' ok", 'icu'), { names: new Set(), ok: true });
+});
+
+test('review: a copied ICU plural/select message is untranslated; a wordless one is not', () => {
+  const copy = { a: '{count, plural, one {# new message} other {# new messages}}', g: '{g, select, male {He replied to you} other {They replied to you}}', n: '{n, plural, one {#} other {#}}' };
+  assert.deepEqual(rules(run(copy, copy)), ['a:untranslated', 'g:untranslated']);
+});
+
+test('review: <br /> and <br/> are the same tag', () => {
+  assert.deepEqual(tags('a<br />b'), ['<br/>']);
+  assert.deepEqual(run({ a: 'Line one<br/>Line two' }, { a: 'Baris satu<br />Baris dua' }), []);
+});
+
+test('review: react-intl flat dotted keys: a missing one is missing, not a type mismatch', () => {
+  assert.deepEqual(rules(run({ home: 'Home', 'home.title': 'Welcome back' }, { home: 'Utama' })), ['home.title:missing']);
+  assert.deepEqual(rules(run({ home: 'Home' }, { home: 'Utama', 'home.title': 'Selamat kembali' })), ['home.title:extra']);
+});
+
+test('review: an i18next _zero form only in the target is allowed', () => {
+  assert.deepEqual(run({ item_one: '{{count}} item', item_other: '{{count}} items' }, { item_zero: 'Tiada item', item_other: '{{count}} item' }), []);
+});
+
+test('review: classify reads the file name first, so a folder called src is not a locale', () => {
+  assert.deepEqual(classify('src/ms.json'), { locale: 'ms' });
+  assert.deepEqual(classify('src/en.json'), { locale: 'en' });
+  assert.deepEqual(classify('public/locales/ms/common.json'), { locale: 'ms', ns: 'common' });
+});
+
+test('review: a different script is a different language (zh-Hans vs zh-Hant); a region is not', () => {
+  const zh = (l: string) => ({ file: `${l}.json`, locale: l, text: '{"a":"欢迎回来 朋友"}' });
+  assert.deepEqual(rules(compare([zh('zh-Hans')], [zh('zh-Hant')])), ['a:untranslated']);
+  assert.deepEqual(compare([en({ a: 'Sign in now' })], [{ file: 'en-GB.json', locale: 'en-GB', text: '{"a":"Sign in now"}' }]), []);
+});
+
+test('review: the 5 MB limit counts bytes, not characters', () => {
+  const text = JSON.stringify({ a: 'é'.repeat(2_600_000) }); // ~5.2 MB in UTF-8, ~2.6M chars
+  assert.throws(() => compare([{ file: 'en.json', locale: 'en', text }], [ms({ a: 'x' })]), /MB/);
+});
+
+test('review cli: src/en.json + src/ms.json are found; duplicate locales exit 2; discovery skips a folder with only the source', () => {
+  const dir = project({ 'src/en.json': { a: 'Hi {name}' }, 'src/ms.json': { a: 'Hai' } });
+  assert.equal(exec(['src'], { cwd: dir }).status, 1);
+  const dup = project({ 'a/en.json': { a: 'Hi' }, 'a/ms.json': { a: 'Hai' }, 'b/ms.json': { a: 'x' } });
+  assert.equal(exec(['a', 'b'], { cwd: dup }).status, 2);
+  const dupSrc = project({ 'a/en.json': { a: 'Hi' }, 'b/en.json': { b: 'Yo' }, 'a/ms.json': { a: 'Hai' } });
+  assert.equal(exec(['a', 'b'], { cwd: dupSrc }).status, 2);
+  const two = project({ 'messages/en.json': { a: 'Hi' }, 'public/locales/en/common.json': { a: 'Hi {name}' }, 'public/locales/ms/common.json': { a: 'Hai' } });
+  const r = exec(['--json'], { cwd: two });
+  assert.equal(r.status, 1, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).locales, ['en', 'ms']);
+});
+
+test('review hook: bad flags exit 0; an invalid source never blocks the target; limits are reported', () => {
+  const dir = project({ 'messages/en.json': '{"a": "Hi",}', 'messages/ms.json': { a: 'Hai' } });
+  assert.equal(exec(['--hook', '--ignore', 'nope'], { input: '{}' }).status, 0);
+  assert.equal(exec(['--hook', '--bogus'], { input: '{}' }).status, 0);
+  assert.equal(hook(dir, 'messages/ms.json').stdout, '');
+  const big = Object.fromEntries(Array.from({ length: MAX_KEYS + 1 }, (_, i) => [`k${i}`, 'x']));
+  const lim = project({ 'messages/en.json': big, 'messages/ms.json': {} });
+  const out = JSON.parse(hook(lim, 'messages/ms.json').stdout);
+  assert.equal(out.decision, undefined);
+  assert.match(out.hookSpecificOutput.additionalContext, /5000/);
+});

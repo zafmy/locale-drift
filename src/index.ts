@@ -19,9 +19,11 @@ Paths can be locale files or folders. With none, looks in: ${FOLDERS.join(', ')}
 Exit codes: 0 no errors, 1 an error (or a warning with --strict), 2 bad usage or no locale files found.
 In --hook mode it always exits 0; findings go back to the agent as JSON on stdout.`;
 
+// In --hook mode exit 2 would be fed to the agent as if it broke a translation, so a bad setup exits 0.
+const HOOK = process.argv.includes('--hook');
 const die = (msg: string): never => {
-  process.stderr.write(`locale-drift: ${msg}\n\n${USAGE}\n`);
-  process.exit(2);
+  process.stderr.write(HOOK ? `locale-drift --hook: ${msg}\n` : `locale-drift: ${msg}\n\n${USAGE}\n`);
+  process.exit(HOOK ? 0 : 2);
 };
 
 function readArgs() {
@@ -98,9 +100,21 @@ function hook(source: string): void {
   const sourcePath = c.ns ? join(dirname(dirname(target)), source, basename(target)) : join(dirname(target), `${source}.json`);
   if (!existsSync(sourcePath)) return;
   const shown = (p: string) => relative(cwd, p) || p;
-  const findings = compare([{ file: shown(sourcePath), text: readFileSync(sourcePath, 'utf8'), ...classify(sourcePath)! }], [{ file: shown(target), text: readFileSync(target, 'utf8'), ...c }]).filter(keep);
-  if (!findings.length) return;
+  const pair = [{ file: shown(sourcePath), text: readFileSync(sourcePath, 'utf8'), ...classify(sourcePath)! }];
+  const written = { file: shown(target), text: readFileSync(target, 'utf8'), ...c };
   const head = `locale-drift: ${shown(target)} vs ${shown(sourcePath)}`;
+  let all: Finding[];
+  try {
+    all = compare(pair, [written]);
+  } catch (e) {
+    // Over a limit: say so rather than go quiet, but don't block.
+    const context = `${head}\nskipped: ${e instanceof Error ? e.message : String(e)}`;
+    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } })}\n`);
+    return;
+  }
+  // Only the file the agent just wrote: a broken source is not this edit's fault.
+  const findings = all.filter((f) => f.file === written.file).filter(keep);
+  if (!findings.length) return;
   let text = head;
   for (const [i, f] of findings.entries()) {
     const next = `${text}\n- ${line(f)}`;
@@ -124,11 +138,22 @@ if (values.hook) {
   process.exit(0);
 }
 
+// With no paths, the first known folder that has the source and at least one other locale.
+const comparable = (f: string[]) => {
+  const locales = f.map((p) => classify(p)?.locale);
+  return locales.includes(values.source) && locales.some((l) => l !== values.source);
+};
 const paths = positionals.length
   ? positionals.flatMap((p) => (isDir(p) ? inFolder(p) : [p]))
-  : (FOLDERS.filter(isDir).map(inFolder).find((f) => f.length) ?? []);
+  : (FOLDERS.filter(isDir).map(inFolder).find(comparable) ?? FOLDERS.filter(isDir).map(inFolder).find((f) => f.length) ?? []);
 if (!paths.length) die(positionals.length ? 'no locale files in the given paths' : `no locale files found in ${FOLDERS.join(', ')}; pass a folder or files`);
 const files = paths.map((p) => read(p, p));
+const seen = new Map<string, string>();
+for (const f of files) {
+  const id = `${f.locale}${f.ns ? `/${f.ns}` : ''}`;
+  if (seen.has(id)) die(`${id} is given twice (${seen.get(id)}, ${f.file}); check one folder at a time`);
+  seen.set(id, f.file);
+}
 const locales = [...new Set(files.map((f) => f.locale))];
 const sources = files.filter((f) => f.locale === values.source);
 const targets = files.filter((f) => f.locale !== values.source);
