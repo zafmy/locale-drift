@@ -84,6 +84,10 @@ test('empty target value is a warning, not also untranslated', () => {
   assert.deepEqual(rules(run({ a: 'Sign in now' }, { a: '' })), ['a:empty']);
 });
 
+test('whitespace-only target value is empty too', () => {
+  assert.deepEqual(rules(run({ a: 'Sign in now', b: 'Hi {name}' }, { a: '   ', b: '\n' })), ['a:empty', 'b:empty']);
+});
+
 test('i18next plural keys follow the target language (CLDR): ms needs only _other', () => {
   const s = { item_one: '{{count}} item', item_other: '{{count}} items', place_ordinal_one: '{{count}}st', place_ordinal_other: '{{count}}th' };
   assert.deepEqual(run(s, { item_other: '{{count}} item', place_ordinal_one: 'ke-{{count}}', place_ordinal_other: 'ke-{{count}}' }), []);

@@ -59,7 +59,7 @@ Exit codes: 0 no errors, 1 an error (or a warning with `--strict`), 2 bad usage,
 | `placeholder` | error | ICU `{name}` / i18next `{{name}}` / `$t(key)` arguments that differ, or unbalanced braces. Order doesn't matter, and plural/select branch text is not an argument |
 | `tag` | error | `<b>`, `<a href>`, `<br/>` or react-i18next `<0>` tags present on one side only. Attributes and `<br />` vs `<br/>` spacing are ignored. Tags are compared as a set, so an ms plural with only an `other` branch is fine |
 | `untranslated` | warning | A value identical to the source with 2+ words, counting the text inside ICU plural and select branches. Skipped when both locales are the same language and script (`en` and `en-GB`, but not `zh-Hans` and `zh-Hant`) |
-| `empty` | warning | An empty string where the source has text |
+| `empty` | warning | An empty or whitespace-only string where the source has text |
 | `invalid-json` | error | A file that isn't valid JSON |
 
 The placeholder syntax is detected from the source: i18next if any value uses `{{…}}`, otherwise ICU (next-intl, react-intl, FormatJS, and vue-i18n's `{name}`).
