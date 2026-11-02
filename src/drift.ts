@@ -256,7 +256,7 @@ const diff = (a: Iterable<string>, b: Iterable<string>) => {
 };
 
 function compareValues(s: string, t: string, format: Format, sameLanguage: boolean): [Rule, string][] {
-  if (t === '' && s !== '') return [['empty', 'is empty']];
+  if (t.trim() === '' && s.trim() !== '') return [['empty', 'is empty']];
   const out: [Rule, string][] = [];
   const as = argNames(s, format);
   const at = argNames(t, format);
