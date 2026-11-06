@@ -255,6 +255,12 @@ test('review: classify reads the file name first, so a folder called src is not 
   assert.deepEqual(classify('public/locales/ms/common.json'), { locale: 'ms', ns: 'common' });
 });
 
+test('review: a namespace that is also a 3-letter language code stays a namespace (en/nav.json)', () => {
+  assert.deepEqual(classify('public/locales/en/nav.json'), { locale: 'en', ns: 'nav' });
+  assert.deepEqual(classify('public/locales/ms-MY/new.json'), { locale: 'ms-MY', ns: 'new' });
+  assert.deepEqual(classify('locales/fil.json'), { locale: 'fil' });
+});
+
 test('review: a different script is a different language (zh-Hans vs zh-Hant); a region is not', () => {
   const zh = (l: string) => ({ file: `${l}.json`, locale: l, text: '{"a":"欢迎回来 朋友"}' });
   assert.deepEqual(rules(compare([zh('zh-Hans')], [zh('zh-Hant')])), ['a:untranslated']);
