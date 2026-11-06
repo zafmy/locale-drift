@@ -35,7 +35,10 @@ export function classify(path: string): { locale: string; ns?: string } | undefi
   const name = basename(path, '.json');
   const parent = basename(dirname(path));
   // The file name wins, so src/ms.json is ms even though "src" is also a language code.
-  if (isLocale(name)) return { locale: name };
+  // Except a 3-letter file in a 2-letter locale folder: en/nav.json is namespace nav (not Navajo).
+  const primary = (code: string) => code.split(/[-_]/)[0].length;
+  const nsInLocaleDir = isLocale(parent) && primary(parent) === 2 && primary(name) === 3;
+  if (isLocale(name) && !nsInLocaleDir) return { locale: name };
   return isLocale(parent) ? { locale: parent, ns: name } : undefined;
 }
 
